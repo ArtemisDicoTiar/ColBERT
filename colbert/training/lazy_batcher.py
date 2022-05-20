@@ -58,13 +58,16 @@ class LazyBatcher():
 
         collection = []
 
-        with open(path) as f:
+        with open(path, 'r', encoding='utf-8') as f:
             for line_idx, line in enumerate(f):
-                pid, passage, title, *_ = line.strip().split('\t')
-                assert pid == 'id' or int(pid) == line_idx
+                if line_idx % (1000 * 1000) == 0:
+                    print(f'{line_idx // 1000 // 1000}M', end=' ', flush=True)
 
-                passage = title + ' | ' + passage
+                pid, passage = line.strip().split('\t')
+                assert int(pid) == line_idx
                 collection.append(passage)
+
+        print()
 
         return collection
 

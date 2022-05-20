@@ -1,9 +1,15 @@
 import string
 import torch
 import torch.nn as nn
+from torch import tensor, Tensor, normal, clamp
+from torch.distributions import Normal
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from transformers import BertPreTrainedModel, BertModel, BertTokenizerFast
 from colbert.parameters import DEVICE
+from colbert.probemb.pie_module import PIENet
+from colbert.probemb.uncertainty_module import UncertaintyModuleText
+from colbert.probemb.utils import l2_normalize, sample_gaussian_tensors
 
 
 class ColBERT(BertPreTrainedModel):
@@ -28,6 +34,12 @@ class ColBERT(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.linear = nn.Linear(config.hidden_size, dim, bias=False)
 
+        # ============ PE ============ #
+        self.n_samples = 2
+        self.mu_linear = nn.Linear(dim, dim)
+        self.sigma_linear = nn.Linear(dim, dim)
+        # ============================ #
+
         self.init_weights()
 
     def forward(self, Q, D):
@@ -42,8 +54,11 @@ class ColBERT(BertPreTrainedModel):
 
     def doc(self, input_ids, attention_mask, keep_dims=True):
         input_ids, attention_mask = input_ids.to(DEVICE), attention_mask.to(DEVICE)
+        # D: batch_size, Document_token_size
         D = self.bert(input_ids, attention_mask=attention_mask)[0]
+        # D: batch_size, Document_token_size, 768(vocab size)
         D = self.linear(D)
+        # D: batch_size, Document_token_size, 128(hidden size set on linear)
 
         mask = torch.tensor(self.mask(input_ids), device=DEVICE).unsqueeze(2).float()
         D = D * mask
@@ -56,12 +71,34 @@ class ColBERT(BertPreTrainedModel):
 
         return D
 
+    def get_doc_mu(self, D):
+        return self.mu_linear.forward(D)
+
+    def get_doc_logsigma(self, D):
+        rand_sigma = self.sigma_linear.forward(D)
+        pos_sigma = clamp(rand_sigma, min=0.000001)
+        return pos_sigma
+
+    def sample_gaussian_tensors(self, mu: Tensor, logsigma: Tensor):
+        eps = torch.randn(mu.size(0), self.n_samples, mu.size(1), mu.size(2), dtype=mu.dtype, device=mu.device)
+
+        samples = eps.mul(torch.exp(logsigma.unsqueeze(1))).add_(mu.unsqueeze(1))
+        return samples
+
     def score(self, Q, D):
+        # ============ PE ============ #
+        mu = self.get_doc_mu(D)
+        logsigma = self.get_doc_logsigma(D)
+        Ds = self.sample_gaussian_tensors(mu, logsigma)
+        Ds = Ds.reshape(self.n_samples*D.shape[0], D.shape[1], D.shape[2])
+        Qs = Q.repeat(2, 1, 1)
+        # ============================ #
+
         if self.similarity_metric == 'cosine':
-            return (Q @ D.permute(0, 2, 1)).max(2).values.sum(1)
+            return (Qs @ Ds.permute(0, 2, 1)).max(2).values.sum(1)
 
         assert self.similarity_metric == 'l2'
-        return (-1.0 * ((Q.unsqueeze(2) - D.unsqueeze(1))**2).sum(-1)).max(-1).values.sum(-1)
+        return (-1.0 * ((Qs.unsqueeze(2) - Ds.unsqueeze(1)) ** 2).sum(-1)).max(-1).values.sum(-1)
 
     def mask(self, input_ids):
         mask = [[(x not in self.skiplist) and (x != 0) for x in d] for d in input_ids.cpu().tolist()]

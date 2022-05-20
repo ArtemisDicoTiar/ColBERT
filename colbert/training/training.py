@@ -94,7 +94,7 @@ def train(args):
         for queries, passages in BatchSteps:
             with amp.context():
                 scores = colbert(queries, passages).view(2, -1).permute(1, 0)
-                loss = criterion(scores, labels[:scores.size(0)])
+                loss = criterion(scores, labels[:scores.size(0)].repeat(2))
                 loss = loss / args.accumsteps
 
             if args.rank < 1:
