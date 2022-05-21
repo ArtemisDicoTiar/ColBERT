@@ -25,7 +25,7 @@ def main():
 
     with Run.context():
         args.colbert, args.checkpoint = load_colbert(args)
-        args.qrels = load_qrels(args.qrels)
+        args.qrels, args.qprel_scores = load_qrels(args.qrels)
 
         if args.collection or args.queries:
             assert args.collection and args.queries

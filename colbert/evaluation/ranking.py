@@ -19,7 +19,7 @@ from colbert.evaluation.slow import slow_rerank
 
 def evaluate(args):
     args.inference = ModelInference(args.colbert, amp=args.amp)
-    qrels, queries, topK_pids = args.qrels, args.queries, args.topK_pids
+    qrels, queries, topK_pids, qprel_scores = args.qrels, args.queries, args.topK_pids, args.qprel_scores
 
     depth = args.depth
     collection = args.collection
@@ -34,6 +34,7 @@ def evaluate(args):
 
     metrics = Metrics(mrr_depths={10, 100}, recall_depths={50, 200, 1000},
                       success_depths={5, 10, 20, 50, 100, 1000},
+                      ndcg_depths={10, 50, 100, 200},
                       total_queries=len(queries))
 
     ranking_logger = RankingLogger(Run.path, qrels=qrels)
@@ -58,7 +59,7 @@ def evaluate(args):
                 rlogger.log(qid, ranking, [0, 1])
 
                 if qrels:
-                    metrics.add(query_idx, qid, ranking, qrels[qid])
+                    metrics.add(query_idx, qid, ranking, qrels[qid], qprel_scores[qid])
 
                     for i, (score, pid, passage) in enumerate(ranking):
                         if pid in qrels[qid]:

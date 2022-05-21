@@ -37,6 +37,7 @@ def load_qrels(qrels_path):
     print_message("#> Loading qrels from", qrels_path, "...")
 
     qrels = OrderedDict()
+    qprelscores = OrderedDict()
     with open(qrels_path, mode='r', encoding="utf-8") as f:
         for line in f:
             try:
@@ -47,9 +48,13 @@ def load_qrels(qrels_path):
             except:  # TREC format
                 qid, _, pid, rel = line.strip().split()
                 qid, pid, rel = map(int, (qid, pid, rel))
-                # assert rel >= 2
+                # if rel < 2:
+                #     continue
                 qrels[qid] = qrels.get(qid, set())
                 qrels[qid].add(pid)
+
+                qprelscores[qid] = qprelscores.get(qid, OrderedDict())
+                qprelscores[qid][pid] = rel
 
     for qid in qrels:
         qrels[qid] = list(qrels[qid])
@@ -61,7 +66,17 @@ def load_qrels(qrels_path):
     print_message("#> Loaded qrels for", len(qrels), "unique queries with",
                   avg_positive, "positives per query on average.\n")
 
-    return qrels
+    all_rels = sum(
+            map(lambda qprelscore: list(map(lambda pscore: pscore[1], qprelscore.items())), qprelscores.values()),
+            []
+        )
+
+    all_qp_pairs = len(all_rels)
+    avg_rel_score = round(sum(all_rels) / all_qp_pairs, 2)
+
+    print_message("#> Average Relevance Score is", avg_rel_score, "\n")
+
+    return qrels, qprelscores
 
 
 def load_topK(topK_path):
@@ -73,7 +88,7 @@ def load_topK(topK_path):
 
     with open(topK_path) as f:
         for line_idx, line in enumerate(f):
-            if line_idx and line_idx % (10*1000*1000) == 0:
+            if line_idx and line_idx % (10 * 1000 * 1000) == 0:
                 print(line_idx, end=' ', flush=True)
 
             qid, pid, query, passage = line.split('\t')
@@ -106,7 +121,7 @@ def load_topK_pids(topK_path, qrels):
 
     with open(topK_path) as f:
         for line_idx, line in enumerate(f):
-            if line_idx and line_idx % (10*1000*1000) == 0:
+            if line_idx and line_idx % (10 * 1000 * 1000) == 0:
                 print(line_idx, end=' ', flush=True)
 
             qid, pid, *rest = line.strip().split('\t')
@@ -114,7 +129,7 @@ def load_topK_pids(topK_path, qrels):
 
             topK_pids[qid].append(pid)
 
-            #!@ custom: make the following code as comment (il-formed; rest[-1]!=label)
+            # !@ custom: make the following code as comment (il-formed; rest[-1]!=label)
             # topK_positives will be assigned with qrels
             """
             assert len(rest) in [1, 2, 3]
@@ -170,7 +185,7 @@ def load_collection(collection_path):
 
     with open(collection_path) as f:
         for line_idx, line in enumerate(f):
-            if line_idx % (1000*1000) == 0:
+            if line_idx % (1000 * 1000) == 0:
                 print(f'{line_idx // 1000 // 1000}M', end=' ', flush=True)
 
             pid, passage, *rest = line.strip().split('\t')
