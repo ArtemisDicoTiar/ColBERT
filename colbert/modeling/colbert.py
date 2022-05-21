@@ -86,6 +86,12 @@ class ColBERT(BertPreTrainedModel):
         return samples
 
     def score(self, Q, D):
+        if self.similarity_metric == 'cosine':
+            # this metric is used for test
+            return (Q @ D.permute(0, 2, 1)).max(2).values.sum(1)
+
+        # Training
+        assert self.similarity_metric == 'l2'
         # ============ PE ============ #
         mu = self.get_doc_mu(D)
         logsigma = self.get_doc_logsigma(D)
@@ -93,11 +99,6 @@ class ColBERT(BertPreTrainedModel):
         Ds = Ds.reshape(self.n_samples*D.shape[0], D.shape[1], D.shape[2])
         Qs = Q.repeat(2, 1, 1)
         # ============================ #
-
-        if self.similarity_metric == 'cosine':
-            return (Qs @ Ds.permute(0, 2, 1)).max(2).values.sum(1)
-
-        assert self.similarity_metric == 'l2'
         return (-1.0 * ((Qs.unsqueeze(2) - Ds.unsqueeze(1)) ** 2).sum(-1)).max(-1).values.sum(-1)
 
     def mask(self, input_ids):
