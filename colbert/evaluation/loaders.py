@@ -39,10 +39,20 @@ def load_qrels(qrels_path):
     qrels = OrderedDict()
     with open(qrels_path, mode='r', encoding="utf-8") as f:
         for line in f:
-            qid, x, pid, y = map(int, line.strip().split('\t'))
-            assert x == 0 and y == 1
-            qrels[qid] = qrels.get(qid, [])
-            qrels[qid].append(pid)
+            try:
+                qid, x, pid, y = map(int, line.strip().split('\t'))
+                assert x == 0 and y == 1
+                qrels[qid] = qrels.get(qid, set())
+                qrels[qid].add(pid)
+            except:  # TREC format
+                qid, _, pid, rel = line.strip().split()
+                qid, pid, rel = map(int, (qid, pid, rel))
+                # assert rel >= 2
+                qrels[qid] = qrels.get(qid, set())
+                qrels[qid].add(pid)
+
+    for qid in qrels:
+        qrels[qid] = list(qrels[qid])
 
     assert all(len(qrels[qid]) == len(set(qrels[qid])) for qid in qrels)
 
