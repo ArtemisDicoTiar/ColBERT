@@ -10,10 +10,11 @@ from colbert.parameters import DEVICE
 from colbert.probemb.pie_module import PIENet
 from colbert.probemb.uncertainty_module import UncertaintyModuleText
 from colbert.probemb.utils import l2_normalize, sample_gaussian_tensors
+from colbert.utils.utils import print_message
 
 
 class ColBERT(BertPreTrainedModel):
-    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, dim=128, similarity_metric='cosine'):
+    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, pe_sampling_size, dim=128, similarity_metric='cosine'):
 
         super(ColBERT, self).__init__(config)
 
@@ -35,7 +36,8 @@ class ColBERT(BertPreTrainedModel):
         self.linear = nn.Linear(config.hidden_size, dim, bias=False)
 
         # ============ PE ============ #
-        self.n_samples = 2
+        self.n_samples = pe_sampling_size
+        print_message(f">> Probabilistic Embedding Sampling Size: {self.n_samples}")
         self.mu_linear = nn.Linear(dim, dim)
         self.sigma_linear = nn.Linear(dim, dim)
         # ============================ #
@@ -97,7 +99,7 @@ class ColBERT(BertPreTrainedModel):
         logsigma = self.get_doc_logsigma(D)
         Ds = self.sample_gaussian_tensors(mu, logsigma)
         Ds = Ds.reshape(self.n_samples*D.shape[0], D.shape[1], D.shape[2])
-        Qs = Q.repeat(2, 1, 1)
+        Qs = Q.repeat(self.n_samples, 1, 1)
         # ============================ #
         return (-1.0 * ((Qs.unsqueeze(2) - Ds.unsqueeze(1)) ** 2).sum(-1)).max(-1).values.sum(-1)
 

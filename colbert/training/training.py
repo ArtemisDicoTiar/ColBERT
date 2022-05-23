@@ -39,8 +39,9 @@ def train(args):
 
     if args.rank not in [-1, 0]:
         torch.distributed.barrier()
-
+    pe_sampling = 5
     colbert = ColBERT.from_pretrained('bert-base-uncased',
+                                      pe_sampling_size=pe_sampling,
                                       query_maxlen=args.query_maxlen,
                                       doc_maxlen=args.doc_maxlen,
                                       dim=args.dim,
@@ -88,13 +89,15 @@ def train(args):
 
         reader.skip_to_batch(start_batch_idx, checkpoint['arguments']['bsize'])
 
-    for batch_idx, BatchSteps in zip(range(start_batch_idx, args.maxsteps), reader):
+    batches = zip(range(start_batch_idx, args.maxsteps), reader)
+    for batch_idx, BatchSteps in batches:
         this_batch_loss = 0.0
 
         for queries, passages in BatchSteps:
             with amp.context():
                 scores = colbert(queries, passages).view(2, -1).permute(1, 0)
-                loss = criterion(scores, labels[:scores.size(0)].repeat(2))
+                ans = labels.repeat(pe_sampling)
+                loss = criterion(scores, ans)
                 loss = loss / args.accumsteps
 
             if args.rank < 1:
@@ -119,5 +122,6 @@ def train(args):
             Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
             Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx, log_to_mlflow=log_to_mlflow)
 
-            print_message(batch_idx, avg_loss)
+            print_message(f"{100 * batch_idx / len(list(batches))} % => ({batch_idx + 1} / {len(list(batches))})\n",
+                          f"Average Loss: {avg_loss}")
             manage_checkpoints(args, colbert, optimizer, batch_idx+1)
