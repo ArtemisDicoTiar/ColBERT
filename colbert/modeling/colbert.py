@@ -14,7 +14,8 @@ from colbert.utils.utils import print_message
 
 
 class ColBERT(BertPreTrainedModel):
-    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, pe_sampling_size, dim=128, similarity_metric='cosine'):
+    def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, pe_sampling_size, dim=128,
+                 similarity_metric='cosine'):
 
         super(ColBERT, self).__init__(config)
 
@@ -98,9 +99,26 @@ class ColBERT(BertPreTrainedModel):
         mu = self.get_doc_mu(D)
         logsigma = self.get_doc_logsigma(D)
         Ds = self.sample_gaussian_tensors(mu, logsigma)
-        Ds = Ds.reshape(self.n_samples*D.shape[0], D.shape[1], D.shape[2])
-        Qs = Q.repeat(self.n_samples, 1, 1)
+        Ds = Ds.reshape(D.shape[0], self.n_samples * D.shape[1], D.shape[2])
+        Qs = Q
         # ============================ #
+        # MaxSim?
+        # Objective: max( similarity_fn( Q, D ) )
+        #   similarity_fns = {cosine, l2}
+        # Inputs
+        #   Q: ( batchSize, {query_tokens, vocab_size[본래 768이지만 128 리니어로 축소되어 있음.]} )
+        #   D: ( batchSize, {document_tokens, vocab_size[본래 768이지만 128 리니어로 축소되어 있음.]} )
+        # How?
+        # * step 1:
+        #   * 우선 시작에 앞서 배치 사이즈는 빼고
+        #   * Q -> Q.unsqueeze(2) => {q_toks, vocab} -> {q_toks, 1, vocab}
+        #   * D -> D.unsqueeze(1) => {d_toks, vocab} -> {1, d_toks, vocab}
+        #   * 이렇게 만든 이유는 (q_toks - d_toks)를 해서 두 벡터간의 차를 구하기 위함.
+        #   * 결과: {q_toks, d_toks, vocab}
+        # * step 2: sum & max
+        #   * sum(-1) 구하고 => {q_toks, d_toks} (q - d 토큰들에 대해 여러 vocab간의 관계중 가장 큰걸 추출)
+        #   * max(-1).values 구하고 => {q_toks, } (q 에 대해 여러 d_toks 중 가장 큰 값을 추출)
+        #   * 다시 sum(-1) => {1, } (q - d 의 relevance 점수)
         return (-1.0 * ((Qs.unsqueeze(2) - Ds.unsqueeze(1)) ** 2).sum(-1)).max(-1).values.sum(-1)
 
     def mask(self, input_ids):
