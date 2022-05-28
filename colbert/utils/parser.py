@@ -14,6 +14,8 @@ class Arguments():
         self.parser = ArgumentParser(description=description)
         self.checks = []
 
+        self.add_argument("--deepspeed_config", dest="deepspeed_config", type=str)
+
         self.add_argument('--root', dest='root', default='experiments')
         self.add_argument('--experiment', dest='experiment', default='dirty')
         self.add_argument('--run', dest='run', default=Run.name)
@@ -29,6 +31,8 @@ class Arguments():
 
         # Filtering-related Arguments
         self.add_argument('--mask-punctuation', dest='mask_punctuation', default=False, action='store_true')
+
+        self.add_argument('--pe_sampling_size', dest='pe_sampling_size', default=5, type=int)
 
     def add_model_training_parameters(self):
         # NOTE: Providing a checkpoint is one thing, --resume is another, --resume_optimizer is yet another.

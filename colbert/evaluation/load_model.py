@@ -12,6 +12,7 @@ from colbert.utils.utils import print_message, load_checkpoint
 
 def load_model(args, do_print=True):
     colbert = ColBERT.from_pretrained('bert-base-uncased',
+                                      pe_sampling_size=args.pe_sampling_size,
                                       query_maxlen=args.query_maxlen,
                                       doc_maxlen=args.doc_maxlen,
                                       dim=args.dim,

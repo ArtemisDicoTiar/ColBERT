@@ -1,6 +1,8 @@
 import os
 import random
 import time
+
+import deepspeed
 import torch
 import torch.nn as nn
 import numpy as np
@@ -37,8 +39,8 @@ def train(args):
     else:
         reader = EagerBatcher(args, (0 if args.rank == -1 else args.rank), args.nranks)
 
-    if args.rank not in [-1, 0]:
-        torch.distributed.barrier()
+    # if args.rank not in [-1, 0]:
+    #     torch.distributed.barrier()
     pe_sampling = 5
     colbert = ColBERT.from_pretrained('bert-base-uncased',
                                       pe_sampling_size=pe_sampling,
@@ -60,21 +62,24 @@ def train(args):
             print_message("[WARNING] Loading checkpoint with strict=False")
             colbert.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
-    if args.rank == 0:
-        torch.distributed.barrier()
+    # if args.rank == 0:
+    #     torch.distributed.barrier()
 
-    colbert = colbert.to(DEVICE)
-    colbert.train()
-
-    if args.distributed:
-        colbert = torch.nn.parallel.DistributedDataParallel(colbert, device_ids=[args.rank],
-                                                            output_device=args.rank,
-                                                            find_unused_parameters=True)
-
-    optimizer = AdamW(filter(lambda p: p.requires_grad, colbert.parameters()), lr=args.lr, eps=1e-8)
-    optimizer.zero_grad()
-
-    amp = MixedPrecisionManager(args.amp)
+    model_engine, optimizer, _, _ = deepspeed.initialize(config=args.deepspeed_config,
+                                                         model=colbert)
+    deepspeed.init_distributed()
+    # colbert.train()
+    #
+    # if args.distributed:
+    #     deepspeed.init_distributed()
+    #     colbert = torch.nn.parallel.DistributedDataParallel(colbert, device_ids=[args.rank],
+    #                                                         output_device=args.rank,
+    #                                                         find_unused_parameters=True)
+    #
+    # optimizer = AdamW(filter(lambda p: p.requires_grad, colbert.parameters()), lr=args.lr, eps=1e-8)
+    # optimizer.zero_grad()
+    #
+    # amp = MixedPrecisionManager(args.amp)
     criterion = nn.CrossEntropyLoss()
     labels = torch.zeros(args.bsize, dtype=torch.long, device=DEVICE)
 
@@ -83,35 +88,34 @@ def train(args):
 
     start_batch_idx = 0
 
-    if args.resume:
-        assert args.checkpoint is not None
-        start_batch_idx = checkpoint['batch']
-
-        reader.skip_to_batch(start_batch_idx, checkpoint['arguments']['bsize'])
+    # if args.resume:
+    #     assert args.checkpoint is not None
+    #     start_batch_idx = checkpoint['batch']
+    #
+    #     reader.skip_to_batch(start_batch_idx, checkpoint['arguments']['bsize'])
 
     batches = zip(range(start_batch_idx, args.maxsteps), reader)
     for batch_idx, BatchSteps in batches:
         this_batch_loss = 0.0
 
         for queries, passages in BatchSteps:
-            with amp.context():
-                scores = colbert(queries, passages).view(2, -1).permute(1, 0)
-                ans = labels.repeat(pe_sampling)
-                loss = criterion(scores, ans)
-                loss = loss / args.accumsteps
+            scores = model_engine(queries, passages).view(2, -1).permute(1, 0)
+            ans = labels.repeat(pe_sampling)
+            loss = criterion(scores, ans)
+            loss = loss / args.accumsteps
 
             if args.rank < 1:
                 print_progress(scores)
 
-            amp.backward(loss)
+            model_engine.backward(loss)
 
             train_loss += loss.item()
             this_batch_loss += loss.item()
 
-        amp.step(colbert, optimizer)
+        model_engine.step()
 
         if args.rank < 1:
-            avg_loss = train_loss / (batch_idx+1)
+            avg_loss = train_loss / (batch_idx + 1)
 
             num_examples_seen = (batch_idx - start_batch_idx) * args.bsize * args.nranks
             elapsed = float(time.time() - start_time)
@@ -124,4 +128,4 @@ def train(args):
 
             print_message(f"{100 * batch_idx / len(list(batches))} % => ({batch_idx + 1} / {len(list(batches))})\n",
                           f"Average Loss: {avg_loss}")
-            manage_checkpoints(args, colbert, optimizer, batch_idx+1)
+            manage_checkpoints(args, model_engine, optimizer, batch_idx + 1)
