@@ -99,8 +99,7 @@ class ColBERT(BertPreTrainedModel):
         mu = self.get_doc_mu(D)
         logsigma = self.get_doc_logsigma(D)
         Ds = self.sample_gaussian_tensors(mu, logsigma)
-        Ds = Ds.reshape(D.shape[0], self.n_samples * D.shape[1], D.shape[2])
-        Qs = Q
+        Qs = Q.unsqueeze(1).repeat(1, self.n_samples, 1, 1)
         # ============================ #
         # MaxSim?
         # Objective: max( similarity_fn( Q, D ) )
@@ -116,10 +115,13 @@ class ColBERT(BertPreTrainedModel):
         #   * 이렇게 만든 이유는 (q_toks - d_toks)를 해서 두 벡터간의 차를 구하기 위함.
         #   * 결과: {q_toks, d_toks, vocab}
         # * step 2: sum & max
-        #   * sum(-1) 구하고 => {q_toks, d_toks} (q - d 토큰들에 대해 여러 vocab간의 관계중 가장 큰걸 추출)
+        #   * squared-L2
+        #       * sum(-1) 구하고 => {q_toks, d_toks} (q - d 토큰들에 대해 여러 vocab간의 관계중 가장 큰걸 추출)
         #   * max(-1).values 구하고 => {q_toks, } (q 에 대해 여러 d_toks 중 가장 큰 값을 추출)
         #   * 다시 sum(-1) => {1, } (q - d 의 relevance 점수)
-        return (-1.0 * ((Qs.unsqueeze(2) - Ds.unsqueeze(1)) ** 2).sum(-1)).max(-1).values.sum(-1)
+
+        # update: amax 를 이용해서 PE 샘플링한 걸 반영해서 계산하게 함.
+        return (-1.0 * ((Qs.unsqueeze(3) - Ds.unsqueeze(2)) ** 2).sum(-1)).amax((-1, -3)).sum(-1)
 
     def mask(self, input_ids):
         mask = [[(x not in self.skiplist) and (x != 0) for x in d] for d in input_ids.cpu().tolist()]

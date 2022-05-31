@@ -14,8 +14,6 @@ class Arguments():
         self.parser = ArgumentParser(description=description)
         self.checks = []
 
-        self.add_argument("--deepspeed_config", dest="deepspeed_config", type=str)
-
         self.add_argument('--root', dest='root', default='experiments')
         self.add_argument('--experiment', dest='experiment', default='dirty')
         self.add_argument('--run', dest='run', default=Run.name)
