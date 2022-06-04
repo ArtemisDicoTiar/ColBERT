@@ -6,6 +6,7 @@ import deepspeed
 import torch
 import torch.nn as nn
 import numpy as np
+from datetime import datetime, timedelta
 
 from transformers import AdamW
 from colbert.utils.runs import Run
@@ -122,5 +123,11 @@ def train(args):
             Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
             Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx, log_to_mlflow=log_to_mlflow)
 
-            print_message(batch_idx, avg_loss)
-            manage_checkpoints(args, colbert, optimizer, batch_idx+1)
+            progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
+            if batch_idx % 10 == 0:
+                print_message(f"elapsed: {timedelta(seconds=elapsed)}",
+                              f"\tprogress:{progress}% ({batch_idx + 1}/{len(range(start_batch_idx, args.maxsteps))})",
+                              f"\tloss: {avg_loss}")
+            manage_checkpoints(args, colbert, optimizer, batch_idx + 1)
+
+    print_message(f"start: {time.ctime(start_time)}, elapsed: {time.ctime(time.time() - start_time)}")

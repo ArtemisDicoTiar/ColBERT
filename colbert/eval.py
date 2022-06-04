@@ -266,5 +266,5 @@ if __name__ == "__main__":
 
     if args.per_query_annotate:
         assert os.path.exists(args.queries)
-    # get_ranking_scores(args)
-    main(args)
+    get_ranking_scores(args)
+    # main(args)

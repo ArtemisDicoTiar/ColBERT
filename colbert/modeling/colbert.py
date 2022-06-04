@@ -1,15 +1,13 @@
 import string
 import torch
 import torch.nn as nn
-from torch import tensor, Tensor, normal, clamp
-from torch.distributions import Normal
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from torch import Tensor
+from torch.nn import LayerNorm
+from torch.nn.functional import normalize
 
 from transformers import BertPreTrainedModel, BertModel, BertTokenizerFast
 from colbert.parameters import DEVICE
-from colbert.probemb.pie_module import PIENet
-from colbert.probemb.uncertainty_module import UncertaintyModuleText
-from colbert.probemb.utils import l2_normalize, sample_gaussian_tensors
+from colbert.probemb.pie_module import MultiHeadSelfAttention
 from colbert.utils.utils import print_message
 
 
@@ -39,10 +37,14 @@ class ColBERT(BertPreTrainedModel):
         # ============ PE ============ #
         self.n_samples = pe_sampling_size
         print_message(f">> Probabilistic Embedding Sampling Size: {self.n_samples}")
+        # https://github.com/naver-ai/pcme/blob/bc14001e9d67b28e3ab989ee367be3f98b999a1f/models/uncertainty_module.py#L45
+        self.attention = MultiHeadSelfAttention(dim, dim, dim)
+        # self.attention = MultiheadAttention(num_heads=1, embed_dim=dim)
         self.mu_linear = nn.Linear(dim, dim)
-        self.sigma_linear = nn.Linear(dim, dim)
+        self.sigmoid = nn.Sigmoid()
+        self.mu_ln = LayerNorm(dim)
+        self.mu_l2 = lambda target: normalize(target, p=2, dim=-1)
         # ============================ #
-
         self.init_weights()
 
     def forward(self, Q, D):
@@ -74,33 +76,52 @@ class ColBERT(BertPreTrainedModel):
 
         return D
 
-    def get_doc_mu(self, D):
-        return self.mu_linear.forward(D)
+    def get_doc_mu(self, D: Tensor, attn_D: Tensor):
+        # https://github.com/naver-ai/pcme/blob/587aa0de710f3f40eac42cd97657c1a9dcfc6ebc/models/pie_model.py#L62
+        soft_attn = self.sigmoid(self.mu_linear(attn_D))
 
-    def get_doc_logsigma(self, D):
-        rand_sigma = self.sigma_linear.forward(D)
-        pos_sigma = clamp(rand_sigma, min=0.000001)
-        return pos_sigma
+        residual_merged = D + soft_attn
+        ln = self.mu_ln(residual_merged)
+        l2 = self.mu_l2(ln)
+
+        return l2
+
+    @staticmethod
+    def get_doc_logsigma(D: Tensor, attn_D: Tensor):
+        residual_merged = D + attn_D
+        return residual_merged
 
     def sample_gaussian_tensors(self, mu: Tensor, logsigma: Tensor):
         eps = torch.randn(mu.size(0), self.n_samples, mu.size(1), mu.size(2), dtype=mu.dtype, device=mu.device)
-
         samples = eps.mul(torch.exp(logsigma.unsqueeze(1))).add_(mu.unsqueeze(1))
         return samples
 
     def score(self, Q, D):
-        if self.similarity_metric == 'cosine':
-            # this metric is used for test
-            return (Q @ D.permute(0, 2, 1)).max(2).values.sum(1)
-
-        # Training
-        assert self.similarity_metric == 'l2'
         # ============ PE ============ #
-        mu = self.get_doc_mu(D)
-        logsigma = self.get_doc_logsigma(D)
+        D_res, D_attn = self.attention(D)
+        # D_attn = self.attention(D)
+        mu = self.get_doc_mu(D, D_attn)
+        logsigma = self.get_doc_logsigma(D, D_attn)
         Ds = self.sample_gaussian_tensors(mu, logsigma)
         Qs = Q.unsqueeze(1).repeat(1, self.n_samples, 1, 1)
         # ============================ #
+        if self.similarity_metric == 'cosine':
+            # this metric is used for test
+            # Q = (1, 32, 128)
+            # D.permute = (1000, 180, 128) -> (1000, 128, 180)
+            # Q @ D.permute = (1000, 32, 180)
+            # Qs = [1, 5, 32, 128]
+            # Ds = [1000, 5, 180, 128] -> permute(0, 1, 3, 2) = [1000, 5, 128, 180]
+            #
+            # .amax((-1, -3)).sum(-1)
+            return (Qs @ Ds.permute(0, 1, 3, 2)) \
+                .reshape(Qs.shape[0], Qs.shape[2], -1) \
+                .amax(-1) \
+                .sum(-1)
+            # .reshape(Qs.shape[0], Qs.shape[1] * Qs.shape[2]) \
+
+        # Training
+        assert self.similarity_metric == 'l2'
         # MaxSim?
         # Objective: max( similarity_fn( Q, D ) )
         #   similarity_fns = {cosine, l2}
@@ -121,7 +142,14 @@ class ColBERT(BertPreTrainedModel):
         #   * 다시 sum(-1) => {1, } (q - d 의 relevance 점수)
 
         # update: amax 를 이용해서 PE 샘플링한 걸 반영해서 계산하게 함.
-        return (-1.0 * ((Qs.unsqueeze(3) - Ds.unsqueeze(2)) ** 2).sum(-1)).amax((-1, -3)).sum(-1)
+
+        return (-1.0 * ((Qs.unsqueeze(3) - Ds.unsqueeze(2)) ** 2).sum(-1)) \
+            .reshape(Qs.shape[0], Qs.shape[2], -1) \
+            .amax(-1) \
+            .sum(-1)
+
+        # .amax((-1, -3)) \
+        # .reshape(Qs.shape[0], Qs.shape[1] * Qs.shape[2])\
 
     def mask(self, input_ids):
         mask = [[(x not in self.skiplist) and (x != 0) for x in d] for d in input_ids.cpu().tolist()]
