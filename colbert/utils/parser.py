@@ -94,7 +94,6 @@ class Arguments():
             check(args)
 
     def add_deepspeed(self):
-        self.add_argument("--deepspeed", dest="is_deepspeed", default=False, type=bool)
         self.parser = deepspeed.add_config_arguments(self.parser)
 
     def parse(self):
