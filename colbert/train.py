@@ -1,5 +1,7 @@
 import os
 import random
+
+import deepspeed
 import torch
 import copy
 
@@ -16,6 +18,7 @@ def main():
     parser.add_model_parameters()
     parser.add_model_training_parameters()
     parser.add_training_input()
+    parser.add_deepspeed()
 
     args = parser.parse()
 

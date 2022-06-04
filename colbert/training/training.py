@@ -65,6 +65,54 @@ def train(args):
 
     if args.rank == 0:
         torch.distributed.barrier()
+    # ============= DEEPSPEED ============= #
+    if args.deepspeed:
+        "AssertionError: Amp and ZeRO are not currently compatible, " \
+        "please use (legacy) fp16 mode which performs similar to amp opt_mode=O2"
+        config = {
+            "train_batch_size": args.bsize,
+            "gradient_accumulation_steps": args.accumsteps,
+            "optimizer": {
+                "type": "AdamW",
+                "params": {
+                    "lr": args.lr,
+                    "eps": 1e-8
+                }
+            },
+            "fp16": {
+                "enabled": True,
+                # "loss_scale": 0,
+                # "initial_scale_power": 32,
+                # "loss_scale_window": 1000,
+                # "hysteresis": 2,
+                # "min_loss_scale": 1
+            }
+            # "amp": {
+            #     "enabled": args.amp,
+            # },
+            # "zero_optimization": {
+            #     "stage": 2,
+            #     "offload_optimizer": {
+            #         "device": "cpu",
+            #         "pin_memory": True
+            #     },
+            #     "offload_param": {
+            #         "device": "cpu",
+            #         "pin_memory": True
+            #     },
+            #     "overlap_comm": True,
+            #     "contiguous_gradients": True,
+            #     "sub_group_size": 1e14,
+            #     "reduce_bucket_size": "auto",
+            #     "stage3_prefetch_bucket_size": "auto",
+            #     "stage3_param_persistence_threshold": "auto",
+            #     "stage3_max_live_parameters": 1e9,
+            #     "stage3_max_reuse_distance": 1e9,
+            #     "stage3_gather_fp16_weights_on_model_save": True
+            # },
+        }
+
+        deepspeed.init_distributed()
 
     colbert = colbert.to(DEVICE)
     colbert.train()

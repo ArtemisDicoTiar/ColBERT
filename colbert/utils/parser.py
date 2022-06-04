@@ -1,5 +1,7 @@
 import os
 import copy
+
+import deepspeed
 import faiss
 
 from argparse import ArgumentParser
@@ -92,6 +94,9 @@ class Arguments():
     def check_arguments(self, args):
         for check in self.checks:
             check(args)
+
+    def add_deepspeed(self):
+        self.parser = deepspeed.add_config_arguments(self.parser)
 
     def parse(self):
         args = self.parser.parse_args()

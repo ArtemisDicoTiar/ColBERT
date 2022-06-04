@@ -35,7 +35,7 @@ def file_tqdm(file):
         pbar.close()
 
 
-def save_checkpoint(path, epoch_idx, mb_idx, model, optimizer, arguments=None):
+def save_checkpoint(path, epoch_idx, mb_idx, model, optimizer, arguments=None, is_deepspeed=False):
     print(f"#> Saving a checkpoint to {path} ..")
 
     if hasattr(model, 'module'):
@@ -47,8 +47,10 @@ def save_checkpoint(path, epoch_idx, mb_idx, model, optimizer, arguments=None):
     checkpoint['model_state_dict'] = model.state_dict()
     checkpoint['optimizer_state_dict'] = optimizer.state_dict()
     checkpoint['arguments'] = arguments
-
-    torch.save(checkpoint, path)
+    if is_deepspeed:
+        model.save_checkpoint(path, client_sd=checkpoint)
+    else:
+        torch.save(checkpoint, path)
 
 
 def load_checkpoint(path, model, optimizer=None, do_print=True):
@@ -94,6 +96,7 @@ def create_directory(path):
         print('\n')
         print_message("#> Creating directory", path, '\n\n')
         os.makedirs(path)
+
 
 # def batch(file, bsize):
 #     while True:
@@ -166,8 +169,9 @@ def zip_first(L1, L2):
 def int_or_float(val):
     if '.' in val:
         return float(val)
-        
+
     return int(val)
+
 
 def load_ranking(path, types=None, lazy=False):
     print_message(f"#> Loading the ranked lists from {path} ..")
@@ -245,8 +249,10 @@ def grouper(iterable, n, fillvalue=None):
 class NullContextManager(object):
     def __init__(self, dummy_resource=None):
         self.dummy_resource = dummy_resource
+
     def __enter__(self):
         return self.dummy_resource
+
     def __exit__(self, *args):
         pass
 
@@ -267,5 +273,5 @@ def load_batch_backgrounds(args, qids):
 
         x = ' [SEP] '.join(x)
         qbackgrounds.append(x)
-    
+
     return qbackgrounds
