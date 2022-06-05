@@ -94,6 +94,8 @@ class ColBERT(BertPreTrainedModel):
     def sample_gaussian_tensors(self, mu: Tensor, logsigma: Tensor):
         eps = torch.randn(mu.size(0), self.n_samples, mu.size(1), mu.size(2), dtype=mu.dtype, device=mu.device)
         samples = eps.mul(torch.exp(logsigma.unsqueeze(1))).add_(mu.unsqueeze(1))
+        # l2 정규화... (아마 여태 성능 안 나왔던건 샘플의 정규화가 안되어 있었어서...?)
+        samples = normalize(samples, p=2, dim=-1)
         return samples
 
     def score(self, Q, D):

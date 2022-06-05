@@ -8,6 +8,7 @@ import torch.nn as nn
 import numpy as np
 from datetime import timedelta
 
+import wandb
 from transformers import AdamW
 from colbert.utils.runs import Run
 from colbert.utils.amp import MixedPrecisionManager
@@ -65,6 +66,8 @@ def train(args):
 
     if args.rank == 0:
         torch.distributed.barrier()
+        wandb.init(project="pe-colbert", entity="artemisdicotiar")
+        wandb.config.update(args)
     # ============= DEEPSPEED ============= #
     if args.deepspeed:
         config = {
@@ -94,6 +97,8 @@ def train(args):
                 "cpu_offload": True
             },
         }
+        if args.rank < 1:
+            wandb.config.update({"deepspeed_config": config})
 
         deepspeed.init_distributed()
 
@@ -130,7 +135,12 @@ def train(args):
                 model.backward(loss)
 
                 if args.rank < 1:
-                    print_progress(scores)
+                    p, n, d = print_progress(scores, p=False)
+                    wandb.log({
+                        "pos_avg": p,
+                        "neg_avg": n,
+                        "diff_avg": d
+                    })
 
             model.step()
 
@@ -140,19 +150,28 @@ def train(args):
                 num_examples_seen = (batch_idx - start_batch_idx) * args.bsize * args.nranks
                 elapsed = float(time.time() - start_time)
 
-                log_to_mlflow = (batch_idx % 20 == 0)
-                Run.log_metric('train/avg_loss', avg_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/batch_loss', this_batch_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx,
-                               log_to_mlflow=log_to_mlflow)
+                # log_to_mlflow = (batch_idx % 20 == 0)
+                # Run.log_metric('train/avg_loss', avg_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/batch_loss', this_batch_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx,
+                #                log_to_mlflow=log_to_mlflow)
+                wandb.log({
+                    'train/avg_loss': avg_loss,
+                    'train/batch_loss': this_batch_loss,
+                    'train/examples': num_examples_seen,
+                    'train/throughput': num_examples_seen / elapsed,
+                })
 
                 progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
                 if batch_idx % 10 == 0:
                     print_message(f"elapsed: {timedelta(seconds=elapsed)}",
                                   f"\tprogress:{progress}% ({batch_idx + 1}/{len(range(start_batch_idx, args.maxsteps))})",
                                   f"\tloss: {avg_loss}")
-                manage_checkpoints(args, model, optimizer, batch_idx + 1)
+
+            # deepspeed's checkpoint must be called from all nodes and gpus.
+            # https://deepspeed.readthedocs.io/en/latest/model-checkpointing.html#saving-training-checkpoints
+            manage_checkpoints(args, model, optimizer, batch_idx + 1)
 
     # ============= Original ============= #
     else:
@@ -215,11 +234,13 @@ def train(args):
                 Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx,
                                log_to_mlflow=log_to_mlflow)
 
-            progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
-            if batch_idx % 10 == 0:
-                print_message(f"elapsed: {timedelta(seconds=elapsed)}",
-                              f"\tprogress:{progress}% ({batch_idx + 1}/{len(range(start_batch_idx, args.maxsteps))})",
-                              f"\tloss: {avg_loss}")
-            manage_checkpoints(args, colbert, optimizer, batch_idx + 1)
+                progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
+                if batch_idx % 10 == 0:
+                    print_message(f"elapsed: {timedelta(seconds=elapsed)}",
+                                  f"\tprogress:{progress}% ({batch_idx + 1}/{len(range(start_batch_idx, args.maxsteps))})",
+                                  f"\tloss: {avg_loss}")
+                manage_checkpoints(args, colbert, optimizer, batch_idx + 1)
 
         print_message(f"start: {time.ctime(start_time)}, elapsed: {time.ctime(time.time() - start_time)}")
+        if args.rank < 1:
+            wandb.finish()

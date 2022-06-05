@@ -10,6 +10,7 @@ import colbert.utils.distributed as distributed
 from colbert.utils.parser import Arguments
 from colbert.utils.runs import Run
 from colbert.training.training import train
+import wandb
 
 
 def main():

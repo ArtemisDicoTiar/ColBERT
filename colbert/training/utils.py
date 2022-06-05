@@ -6,9 +6,11 @@ from colbert.utils.utils import print_message, save_checkpoint
 from colbert.parameters import SAVED_CHECKPOINTS
 
 
-def print_progress(scores):
+def print_progress(scores, p=True):
     positive_avg, negative_avg = round(scores[:, 0].mean().item(), 2), round(scores[:, 1].mean().item(), 2)
-    print(f"#>>>  pos_avg: {positive_avg}, neg_avg: {negative_avg}\t\t|\t\t diff_avg: {positive_avg - negative_avg}")
+    if p:
+        print(f"#>>>  pos_avg: {positive_avg}, neg_avg: {negative_avg}\t\t|\t\t diff_avg: {positive_avg - negative_avg}")
+    return positive_avg, negative_avg, positive_avg - negative_avg
 
 
 def manage_checkpoints(args, colbert, optimizer, batch_idx):
