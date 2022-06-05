@@ -38,8 +38,9 @@ def file_tqdm(file):
 def save_checkpoint(path, epoch_idx, mb_idx, model, optimizer, arguments=None, is_deepspeed=False):
     print(f"#> Saving a checkpoint to {path} ..")
 
-    if hasattr(model, 'module'):
-        model = model.module  # extract model from a distributed/data-parallel wrapper
+    if not is_deepspeed:
+        if hasattr(model, 'module'):
+            model = model.module  # extract model from a distributed/data-parallel wrapper
 
     checkpoint = {}
     checkpoint['epoch'] = epoch_idx
@@ -48,7 +49,7 @@ def save_checkpoint(path, epoch_idx, mb_idx, model, optimizer, arguments=None, i
     checkpoint['optimizer_state_dict'] = optimizer.state_dict()
     checkpoint['arguments'] = arguments
     if is_deepspeed:
-        model.save_checkpoint(path, client_sd=checkpoint)
+        model.save_checkpoint(path, client_state=checkpoint)
     else:
         torch.save(checkpoint, path)
 

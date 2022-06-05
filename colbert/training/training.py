@@ -78,8 +78,21 @@ def train(args):
                 }
             },
             "fp16": {
-                "enabled": True,
-            }
+                "enabled": False,
+            },
+            # "amp": {
+            #     "enabled": args.amp,
+            # },
+            "zero_optimization": {
+                "stage": 2,
+                "allgather_partitions": True,
+                "allgather_bucket_size": 2e8,
+                "overlap_comm": True,
+                "reduce_scatter": True,
+                "reduce_bucket_size": 2e8,
+                "contiguous_gradients": True,
+                "cpu_offload": True
+            },
         }
 
         deepspeed.init_distributed()
