@@ -83,22 +83,38 @@ def train(args):
             "fp16": {
                 "enabled": False,
             },
+            # this option only available when zero is not activated.
             # "amp": {
             #     "enabled": args.amp,
             # },
             "zero_optimization": {
-                "stage": 2,
+                # pe-colbert (즉, colbert 계열)에서는 zero를 적용하지 않는 게 throughput 이 높다.
+                # [106, 101, 99, ~= 75] = [0, 1, 2, 3]
+                # throughput 개선은 물론 mem, cpu, gpu, gpu-mem 리소스의 적절한 콜라보를 위해서는
+                # 적절한 딥스피드 설정을 가지고 있어야할 것 같다.
+                "stage": 0,
                 "allgather_partitions": True,
                 "allgather_bucket_size": 2e8,
                 "overlap_comm": True,
                 "reduce_scatter": True,
                 "reduce_bucket_size": 2e8,
                 "contiguous_gradients": True,
-                "cpu_offload": True
+                # offload를 사용하면 GPU에서 메모리 부족이슈는 해결 가능하지만 throughput은 저하될 수 있다.
+                # "offload_optimizer": {
+                #     "device": "cpu",
+                #     "pin_memory": True
+                # },
+                # "offload_param": {
+                #     "device": "cpu",
+                #     "pin_memory": True
+                # },
+                # "sub_group_size": 1e14,
+                # "stage3_max_live_parameters": 1e9,
+                # "stage3_max_reuse_distance": 1e9,
             },
         }
         if args.rank < 1:
-            wandb.config.update({"deepspeed_config": config})
+            wandb.config.update({"deepspeed_config": config}, allow_val_change=True)
 
         deepspeed.init_distributed()
 
@@ -124,6 +140,7 @@ def train(args):
         for batch_idx, BatchSteps in batches:
             this_batch_loss = 0.0
 
+            ps, ns, ds = [], [], []
             for queries, passages in BatchSteps:
                 scores = colbert(queries, passages).view(2, -1).permute(1, 0)
                 loss = criterion(scores, labels[:scores.size(0)])
@@ -136,11 +153,9 @@ def train(args):
 
                 if args.rank < 1:
                     p, n, d = print_progress(scores, p=False)
-                    wandb.log({
-                        "pos_avg": p,
-                        "neg_avg": n,
-                        "diff_avg": d
-                    })
+                    ps.append(p)
+                    ns.append(n)
+                    ds.append(d)
 
             model.step()
 
@@ -161,10 +176,13 @@ def train(args):
                     'train/batch_loss': this_batch_loss,
                     'train/examples': num_examples_seen,
                     'train/throughput': num_examples_seen / elapsed,
+                    "pos_avg": sum(ps) / len(ps),
+                    "neg_avg": sum(ns) / len(ns),
+                    "diff_avg": sum(ds) / len(ds)
                 })
 
                 progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
-                if batch_idx % 10 == 0:
+                if batch_idx % 100 == 0:
                     print_message(f"elapsed: {timedelta(seconds=elapsed)}",
                                   f"\tprogress:{progress}% ({batch_idx + 1}/{len(range(start_batch_idx, args.maxsteps))})",
                                   f"\tloss: {avg_loss}")

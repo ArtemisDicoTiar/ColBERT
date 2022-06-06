@@ -42,7 +42,6 @@ def get_ranking_scores(args):
         args.queries, args.topK_docs, args.topK_pids = load_topK(args.topK)
     args.inference = ModelInference(args.colbert, amp=args.amp)
 
-    args.inference = ModelInference(args.colbert, amp=args.amp)
     qrels, queries, topK_pids, qprel_scores = args.qrels, args.queries, args.topK_pids, args.qprel_scores
 
     depth = args.depth
