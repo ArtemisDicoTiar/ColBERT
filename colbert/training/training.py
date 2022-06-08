@@ -20,6 +20,7 @@ from colbert.parameters import DEVICE
 from colbert.modeling.colbert import ColBERT
 from colbert.utils.utils import print_message
 from colbert.training.utils import print_progress, manage_checkpoints
+from colbert.ds_utils.model import get_ds_model
 
 
 def train(args):
@@ -70,57 +71,7 @@ def train(args):
         wandb.config.update(args)
     # ============= DEEPSPEED ============= #
     if args.deepspeed:
-        config = {
-            "train_batch_size": args.bsize,
-            "gradient_accumulation_steps": args.accumsteps,
-            "optimizer": {
-                "type": "AdamW",
-                "params": {
-                    "lr": args.lr,
-                    "eps": 1e-8
-                }
-            },
-            "fp16": {
-                "enabled": False,
-            },
-            # this option only available when zero is not activated.
-            # "amp": {
-            #     "enabled": args.amp,
-            # },
-            "zero_optimization": {
-                # pe-colbert (즉, colbert 계열)에서는 zero를 적용하지 않는 게 throughput 이 높다.
-                # [106, 101, 99, ~= 75] = [0, 1, 2, 3]
-                # throughput 개선은 물론 mem, cpu, gpu, gpu-mem 리소스의 적절한 콜라보를 위해서는
-                # 적절한 딥스피드 설정을 가지고 있어야할 것 같다.
-                "stage": 0,
-                "allgather_partitions": True,
-                "allgather_bucket_size": 2e8,
-                "overlap_comm": True,
-                "reduce_scatter": True,
-                "reduce_bucket_size": 2e8,
-                "contiguous_gradients": True,
-                # offload를 사용하면 GPU에서 메모리 부족이슈는 해결 가능하지만 throughput은 저하될 수 있다.
-                # "offload_optimizer": {
-                #     "device": "cpu",
-                #     "pin_memory": True
-                # },
-                # "offload_param": {
-                #     "device": "cpu",
-                #     "pin_memory": True
-                # },
-                # "sub_group_size": 1e14,
-                # "stage3_max_live_parameters": 1e9,
-                # "stage3_max_reuse_distance": 1e9,
-            },
-        }
-        if args.rank < 1:
-            wandb.config.update({"deepspeed_config": config}, allow_val_change=True)
-
-        deepspeed.init_distributed()
-
-        model, optimizer, _, _ = deepspeed.initialize(model=colbert,
-                                                      config_params=config,
-                                                      model_parameters=colbert.parameters())
+        model, optimizer = get_ds_model(args, colbert)
 
         criterion = nn.CrossEntropyLoss()
         labels = torch.zeros(args.bsize, dtype=torch.long, device=DEVICE)
@@ -223,6 +174,7 @@ def train(args):
         for batch_idx, BatchSteps in batches:
             this_batch_loss = 0.0
 
+            ps, ns, ds = [], [], []
             for queries, passages in BatchSteps:
                 with amp.context():
                     scores = colbert(queries, passages).view(2, -1).permute(1, 0)
@@ -230,7 +182,11 @@ def train(args):
                     loss = loss / args.accumsteps
 
                 if args.rank < 1:
-                    print_progress(scores)
+                    if args.rank < 1:
+                        p, n, d = print_progress(scores, p=False)
+                        ps.append(p)
+                        ns.append(n)
+                        ds.append(d)
 
                 amp.backward(loss)
 
@@ -245,12 +201,22 @@ def train(args):
                 num_examples_seen = (batch_idx - start_batch_idx) * args.bsize * args.nranks
                 elapsed = float(time.time() - start_time)
 
-                log_to_mlflow = (batch_idx % 20 == 0)
-                Run.log_metric('train/avg_loss', avg_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/batch_loss', this_batch_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
-                Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx,
-                               log_to_mlflow=log_to_mlflow)
+                # log_to_mlflow = (batch_idx % 20 == 0)
+                # Run.log_metric('train/avg_loss', avg_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/batch_loss', this_batch_loss, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/examples', num_examples_seen, step=batch_idx, log_to_mlflow=log_to_mlflow)
+                # Run.log_metric('train/throughput', num_examples_seen / elapsed, step=batch_idx,
+                #                log_to_mlflow=log_to_mlflow)
+
+                wandb.log({
+                    'train/avg_loss': avg_loss,
+                    'train/batch_loss': this_batch_loss,
+                    'train/examples': num_examples_seen,
+                    'train/throughput': num_examples_seen / elapsed,
+                    "pos_avg": sum(ps) / len(ps),
+                    "neg_avg": sum(ns) / len(ns),
+                    "diff_avg": sum(ds) / len(ds)
+                })
 
                 progress = 100 * (batch_idx + 1) / len(range(start_batch_idx, args.maxsteps))
                 if batch_idx % 10 == 0:

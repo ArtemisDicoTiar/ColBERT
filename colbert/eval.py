@@ -1,7 +1,7 @@
 """
     Evaluate MS MARCO Passages ranking.
 """
-
+import deepspeed
 import ujson
 
 import pandas as pd
@@ -15,7 +15,6 @@ from pyterrier.measures import RR, nDCG, AP, NumRet, R, P
 
 import os
 
-
 import random
 import torch
 from colbert.utils.utils import print_message
@@ -26,6 +25,7 @@ from colbert.evaluation.slow import slow_rerank
 
 from colbert.evaluation.loaders import load_colbert, load_qrels, load_queries, load_collection, load_topK_pids, \
     load_topK
+
 
 def get_ranking_scores(args):
     args.colbert, args.checkpoint = load_colbert(args)
@@ -74,10 +74,11 @@ def get_ranking_scores(args):
 
             ranking = slow_rerank(args, query, topK_pids[qid], qid2passages(qid))
             ranking = sorted(ranking, key=lambda row: row[0], reverse=True)
-            score_pid_df = pd.DataFrame(list(enumerate(map(lambda row: row[1], ranking))), columns=["ranking", "pid"])
+            score_pid_df = pd.DataFrame(
+                list(enumerate(map(lambda row: row[1], ranking))), columns=["ranking", "pid"]
+            )
             score_pid_df['qid'] = qid
             score_pid_df = score_pid_df[['qid', 'pid', 'ranking']]
-
 
             # output_path = 'my_csv.csv'
             score_pid_df.to_csv(ranking_output_path,
@@ -154,7 +155,6 @@ def main(args):
 
     if not pt.started():
         pt.init()
-
 
     thr = args.binarization_point
     eval = pt.Utils.evaluate(
@@ -265,5 +265,5 @@ if __name__ == "__main__":
 
     if args.per_query_annotate:
         assert os.path.exists(args.queries)
-    get_ranking_scores(args)
-    # main(args)
+    # get_ranking_scores(args)
+    main(args)

@@ -1,7 +1,7 @@
 import string
 import torch
 import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, einsum
 from torch.nn import LayerNorm
 from torch.nn.functional import normalize
 
@@ -116,8 +116,8 @@ class ColBERT(BertPreTrainedModel):
             # Ds = [1000, 5, 180, 128] -> permute(0, 1, 3, 2) = [1000, 5, 128, 180]
             #
             # .amax((-1, -3)).sum(-1)
-            return (Qs @ Ds.permute(0, 1, 3, 2)) \
-                .reshape(Qs.shape[0], Qs.shape[2], -1) \
+            return einsum("ibqv,jbdv->jbqd", Qs, Ds)\
+                .reshape(Ds.shape[0], Qs.shape[2], -1)\
                 .amax(-1) \
                 .sum(-1)
             # .reshape(Qs.shape[0], Qs.shape[1] * Qs.shape[2]) \

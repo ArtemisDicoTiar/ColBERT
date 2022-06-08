@@ -6,7 +6,7 @@ from colbert.utils.amp import MixedPrecisionManager
 from colbert.parameters import DEVICE
 
 
-class ModelInference():
+class ModelInference:
     def __init__(self, colbert: ColBERT, amp=False):
         assert colbert.training is False
 
