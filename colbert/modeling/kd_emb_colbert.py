@@ -7,15 +7,12 @@ from torch.nn.functional import normalize
 
 from transformers import BertPreTrainedModel, BertModel, BertTokenizerFast
 from colbert.parameters import DEVICE
-from colbert.probemb.pie_module import MultiHeadSelfAttention
-from colbert.utils.utils import print_message
 
 
-class ColBERT(BertPreTrainedModel):
+class KDEmbedColBERT(BertPreTrainedModel):
     def __init__(self, config, query_maxlen, doc_maxlen, mask_punctuation, pe_sampling_size, dim=128,
                  similarity_metric='cosine'):
-
-        super(ColBERT, self).__init__(config)
+        super(KDEmbedColBERT, self).__init__(config)
 
         self.query_maxlen = query_maxlen
         self.doc_maxlen = doc_maxlen
@@ -34,75 +31,54 @@ class ColBERT(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.linear = nn.Linear(config.hidden_size, dim, bias=False)
 
-        # ============ PE ============ #
-        self.n_samples = pe_sampling_size
-        print_message(f">> Probabilistic Embedding Sampling Size: {self.n_samples}")
-        # https://github.com/naver-ai/pcme/blob/bc14001e9d67b28e3ab989ee367be3f98b999a1f/models/uncertainty_module.py#L45
-        self.attention = MultiHeadSelfAttention(dim, dim, dim)
-        # self.attention = MultiheadAttention(num_heads=1, embed_dim=dim)
-        self.mu_linear = nn.Linear(dim, dim)
-        self.sigmoid = nn.Sigmoid()
-        self.mu_ln = LayerNorm(dim)
-        self.mu_l2 = lambda target: normalize(target, p=2, dim=-1)
-        # ============================ #
         self.init_weights()
 
     def forward(self, Q, D):
-        return self.score(self.query(*Q), self.doc(*D))
+        hQ, lQ = self.query(*Q)
+        hD, lD = self.doc(*D)
+        return (hQ, hD), self.student_score(lQ, lD)
 
     def query(self, input_ids, attention_mask):
         input_ids, attention_mask = input_ids.to(DEVICE), attention_mask.to(DEVICE)
-        Q = self.bert(input_ids, attention_mask=attention_mask)[0]
-        Q = self.linear(Q)
+        org_Q = self.bert(input_ids, attention_mask=attention_mask)[0]
+        red_Q = self.linear(org_Q)
 
-        return torch.nn.functional.normalize(Q, p=2, dim=2)
+        org_Q = torch.nn.functional.normalize(org_Q, p=2, dim=2)
+        red_Q = torch.nn.functional.normalize(red_Q, p=2, dim=2)
+        return org_Q, red_Q
 
     def doc(self, input_ids, attention_mask, keep_dims=True):
         input_ids, attention_mask = input_ids.to(DEVICE), attention_mask.to(DEVICE)
-        # D: batch_size, Document_token_size
-        D = self.bert(input_ids, attention_mask=attention_mask)[0]
-        # D: batch_size, Document_token_size, 768(vocab size)
-        D = self.linear(D)
-        # D: batch_size, Document_token_size, 128(hidden size set on linear)
-
         mask = torch.tensor(self.mask(input_ids), device=DEVICE).unsqueeze(2).float()
-        D = D * mask
 
-        D = torch.nn.functional.normalize(D, p=2, dim=2)
+        # D: batch_size, Document_token_size
+        org_D = self.bert(input_ids, attention_mask=attention_mask)[0]
+        # D: batch_size, Document_token_size, 768(vocab size)
+        red_D = self.linear(org_D)
+        # D: batch_size, Document_token_size, 128(hidden size set on linear)
+        org_D *= mask
+        red_D *= mask
+
+        org_D = torch.nn.functional.normalize(org_D, p=2, dim=2)
+        red_D = torch.nn.functional.normalize(red_D, p=2, dim=2)
 
         if not keep_dims:
-            D, mask = D.cpu().to(dtype=torch.float16), mask.cpu().bool().squeeze(-1)
-            D = [d[mask[idx]] for idx, d in enumerate(D)]
+            org_D, mask = org_D.cpu().to(dtype=torch.float16), mask.cpu().bool().squeeze(-1)
+            org_D = [d[mask[idx]] for idx, d in enumerate(org_D)]
 
-        return D
+            red_D, mask = red_D.cpu().to(dtype=torch.float16), mask.cpu().bool().squeeze(-1)
+            red_D = [d[mask[idx]] for idx, d in enumerate(red_D)]
 
-    def get_doc_mu(self, D: Tensor, attn_D: Tensor):
-        # https://github.com/naver-ai/pcme/blob/587aa0de710f3f40eac42cd97657c1a9dcfc6ebc/models/pie_model.py#L62
-        soft_attn = self.sigmoid(self.mu_linear(attn_D))
-
-        residual_merged = D + soft_attn
-        ln = self.mu_ln(residual_merged)
-        l2 = self.mu_l2(ln)
-
-        return l2
-
-    @staticmethod
-    def get_doc_logsigma(D: Tensor, attn_D: Tensor):
-        residual_merged = D + attn_D
-        return residual_merged
-
-    def sample_gaussian_tensors(self, mu: Tensor, logsigma: Tensor):
-        eps = torch.randn(mu.size(0), self.n_samples, mu.size(1), mu.size(2), dtype=mu.dtype, device=mu.device)
-        samples = eps.mul(torch.exp(logsigma.unsqueeze(1))).add_(mu.unsqueeze(1))
-        # l2 정규화... (아마 여태 성능 안 나왔던건 샘플의 정규화가 안되어 있었어서...?)
-        samples = normalize(samples, p=2, dim=-1)
-        return samples
+        return org_D, red_D
 
     def mask(self, input_ids):
         mask = [[(x not in self.skiplist) and (x != 0) for x in d] for d in input_ids.cpu().tolist()]
         return mask
 
-    def score(self, Q, D):
+    def distill_score(self, Q: Tensor, D: Tensor):
+        ...
+
+    def student_score(self, Q: Tensor, D: Tensor):
         if self.similarity_metric == 'cosine':
             # this metric is used for test
             # Q = (1, 32, 128)

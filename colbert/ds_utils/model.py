@@ -55,3 +55,12 @@ def get_ds_model(args, colbert):
                                                   config_params=config,
                                                   model_parameters=colbert.parameters())
     return model, optimizer
+
+
+def get_ds_ce_model(args, cross_encoder):
+    ds_engine = deepspeed.init_inference(cross_encoder,
+                                         checkpoint=None,
+                                         replace_method='auto',
+                                         replace_with_kernel_inject=True)
+    model = ds_engine.module
+    return model
